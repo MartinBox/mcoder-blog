@@ -12,14 +12,12 @@ categories:
 ![](Apache Sentinel源码分析/Sequence Sentinel.png)
 ## 初始化InitFunc
 框架提供InitFunc接口，用于实现首次执行时的初始化操作，因为是通过SPI机制进行加载，所有用户层可以自扩展自己的初始化操作，同时提供`@InitOrder`注解，用户控制执行顺序（越小越先执行）。
-
+![](Apache Sentinel源码分析/InitFunc UML.png)
 ### CommandCenterInitFunc
-原理：通过SPI机制加载`CommandCenter`插件，唯一实现类`SimpleHttpCommandCenter`。
-功能：启动client内置的http服务（socket实现），用于和sentinel-dashboard服务进行通讯
+原通过SPI机制加载`CommandCenter`插件，启动client内置的http服务（`NettyHttpCommandCenter`采用Netty实现，`SimpleHttpCommandCenter`采用原生Socket实现），用于和sentinel-dashboard服务进行通讯，比如dashboard查询节点实时监控信息。
 
 ### HeartbeatSenderInitFunc
-原理：通过SPI机制加载`HeartbeatSender`插件，唯一实现类`SimpleHttpHeartbeatSender`。
-功能：定时向sentinel-dashboard（uri=/registry/machine）发送心跳信息。多个控制台地址格式：ip1:port1,ip2:port2...
+通过SPI机制加载`HeartbeatSender`插件，唯一实现类`SimpleHttpHeartbeatSender`，用于定时向sentinel-dashboard（uri=/registry/machine）发送心跳信息。多个控制台地址格式：ip1:port1,ip2:port2...
 
 
 ## 定义资源执行逻辑
