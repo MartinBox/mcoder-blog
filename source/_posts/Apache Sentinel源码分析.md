@@ -6,8 +6,10 @@ tags:
 categories:
   Sentinel
 ---
-关于[Alibaba Sentinel](https://github.com/alibaba/Sentinel)是什么、以及具有哪些特性、怎么使用（[Sentinel Demo 集锦](https://github.com/alibaba/Sentinel/tree/master/sentinel-demo)）等等，可以查看官方github wiki说明，这里不详细展开。
+关于[Alibaba Sentinel](https://github.com/alibaba/Sentinel/wiki/%E4%BB%8B%E7%BB%8D)是什么、以及具有哪些特性、怎么使用（[Sentinel Demo 集锦](https://github.com/alibaba/Sentinel/tree/master/sentinel-demo)）等等，可以查看官方github wiki说明，这里不详细展开。
 
+## 整体时序图
+![](Apache Sentinel源码分析/Sequence Sentinel.png)
 ## 初始化InitFunc
 框架提供InitFunc接口，用于实现首次执行时的初始化操作，因为是通过SPI机制进行加载，所有用户层可以自扩展自己的初始化操作，同时提供`@InitOrder`注解，用户控制执行顺序（越小越先执行）。
 
@@ -93,9 +95,107 @@ public class DefaultSlotChainBuilder implements SlotChainBuilder {
 >页面位置：流控规则->新增流控规则->流控模式->关联
 
 ### 降级规则DegradeSlot
+[官方文档-熔断降级](https://github.com/alibaba/Sentinel/wiki/%E7%86%94%E6%96%AD%E9%99%8D%E7%BA%A7)
+#### 平均响应时间
+* 并不是资源平均相应时间大于设定rt时立马执行降级，而是在时间窗口1s内（`StatisticNode.avgRt()`）发生5（`DegradeRule.RT_MAX_EXCEED_N`）次，才会执行降级。
+* Sentinel 默认统计的 RT 上限是 4900 ms，超出此阈值的都会算作 4900 ms，若需要变更此上限可以通过启动配置项 `-Dcsp.sentinel.statistic.max.rt=xxx` 来配置。
+
+```
+public class DegradeRule extends AbstractRule {
+    ......
+    @Override
+    public boolean passCheck(Context context, DefaultNode node, int acquireCount, Object... args) {
+        ......
+        if (grade == RuleConstant.DEGRADE_GRADE_RT) {
+            double rt = clusterNode.avgRt();
+            if (rt < this.count) {
+                passCount.set(0);
+                return true;
+            }
+
+            // Sentinel will degrade the service only if count exceeds.
+            if (passCount.incrementAndGet() < RT_MAX_EXCEED_N) {
+                return true;
+            }
+        }
+        ......
+        // 更新降级标记位，并启动重置线程，在设定时间窗口内关闭降级开关
+        if (cut.compareAndSet(false, true)) {
+            ResetTask resetTask = new ResetTask(this);
+            pool.schedule(resetTask, timeWindow, TimeUnit.SECONDS);
+       }
+       ......
+}
+```
+
+```
+public class StatisticSlot extends AbstractLinkedProcessorSlot<DefaultNode> {
+    ......
+    @Override
+    public void exit(Context context, ResourceWrapper resourceWrapper, int count, Object... args) {
+        ......
+        if (context.getCurEntry().getError() == null) {
+            // Calculate response time (max RT is TIME_DROP_VALVE).
+            long rt = TimeUtil.currentTimeMillis() - context.getCurEntry().getCreateTime();
+            if (rt > Constants.TIME_DROP_VALVE) {
+                rt = Constants.TIME_DROP_VALVE;
+            }
+            ......
+        }
+        ......
+    }
+}
+```
+
+#### 异常比例
+* 异常比率的阈值范围是 [0.0, 1.0]，代表 0% - 100%
+* 时间窗口单位为1秒
+
+
+#### 异常数
+资源近 1 分钟的异常数目超过阈值之后会进行熔断。
 
 ### 系统规则SystemSlot
+[官方文档-系统自适应限流](https://github.com/alibaba/Sentinel/wiki/%E7%B3%BB%E7%BB%9F%E8%87%AA%E9%80%82%E5%BA%94%E9%99%90%E6%B5%81)
+Sentinel有定时机制，每隔1s检查当前系统负载情况
+```
+public class SystemRuleManager {
+    ......
+    // sentinel-dashboard配置项变更监听
+    private final static SystemPropertyListener listener = new SystemPropertyListener();
+    private static SentinelProperty<List<SystemRule>> currentProperty = new DynamicSentinelProperty<List<SystemRule>>();
+
+    @SuppressWarnings("PMD.ThreadPoolCreationRule")
+    private final static ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1,
+        new NamedThreadFactory("sentinel-system-status-record-task", true));
+
+    static {
+        checkSystemStatus.set(false);
+        // 定时监听系统负载
+        statusListener = new SystemStatusListener();
+        scheduler.scheduleAtFixedRate(statusListener, 5, 1, TimeUnit.SECONDS);
+        currentProperty.addListener(listener);
+    }
+    ......
+}
+```
+#### Load
+
+#### RT
+
+#### 线程数
+
+#### 入口 QPS
 
 ### 授权规则AuthoritySlot
+[官方文档-黑白名单控制](https://github.com/alibaba/Sentinel/wiki/%E9%BB%91%E7%99%BD%E5%90%8D%E5%8D%95%E6%8E%A7%E5%88%B6)
+#### 白名单
+
+#### 黑名单
+
+### 热点规则ParamFlowSlot
+[官方文档-热点参数限流](https://github.com/alibaba/Sentinel/wiki/%E7%83%AD%E7%82%B9%E5%8F%82%E6%95%B0%E9%99%90%E6%B5%81)
+需要结合`public static Entry entry(Method method, EntryType type, int count, Object... args) throws BlockException`等含有`Object... args`参数的方法使用。
+主要用于热点数据限流。
 
 ### 集群流控ClusterBuilderSlot
